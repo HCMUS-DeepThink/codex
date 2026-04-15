@@ -326,8 +326,12 @@ fn forward_request(
     };
 
     if let Some(force_content_type) = force_content_type {
-        response_headers
-            .retain(|header| !header.field.as_str().eq_ignore_ascii_case("content-type"));
+        response_headers.retain(|header| {
+            !header
+                .field
+                .to_string()
+                .eq_ignore_ascii_case("content-type")
+        });
         if let Ok(header) =
             Header::from_bytes(b"content-type".as_slice(), force_content_type.as_bytes())
         {

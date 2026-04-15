@@ -533,22 +533,18 @@ fn message_content_to_chat_content(content: Option<&Value>) -> Value {
 
     if parts.is_empty() {
         Value::String(String::new())
-    } else if !has_image
-        && parts.len() == 1
-        && parts
-            .first()
-            .and_then(|part| part.get("type"))
-            .and_then(Value::as_str)
-            == Some("text")
-    {
-        Value::String(
-            parts
-                .first()
-                .and_then(|part| part.get("text"))
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_string(),
-        )
+    } else if !has_image && parts.len() == 1 {
+        let part = &parts[0];
+        if part.get("type").and_then(Value::as_str) == Some("text") {
+            Value::String(
+                part.get("text")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+            )
+        } else {
+            Value::Array(parts)
+        }
     } else {
         Value::Array(parts)
     }

@@ -210,10 +210,15 @@ fn forward_request(
             .ok()
     });
 
+    let request_stream = serde_json::from_slice::<serde_json::Value>(&body)
+        .ok()
+        .and_then(|request| request.get("stream").and_then(serde_json::Value::as_bool))
+        .unwrap_or(false);
+
     let mapped_request = match config.upstream_wire_api {
         UpstreamWireApi::Responses => MappedRequestBody {
             body,
-            stream: false,
+            stream: request_stream,
         },
         UpstreamWireApi::ChatCompletions => {
             translate::responses_to_chat_completions_request(&body)?

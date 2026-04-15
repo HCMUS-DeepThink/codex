@@ -1,6 +1,7 @@
 use std::fs::File;
 use std::fs::{self};
 use std::io::Read;
+use std::io::Cursor;
 use std::io::Write;
 use std::net::SocketAddr;
 use std::net::TcpListener;
@@ -13,6 +14,7 @@ use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
 use clap::Parser;
+use clap::ValueEnum;
 use reqwest::Url;
 use reqwest::blocking::Client;
 use reqwest::header::AUTHORIZATION;
@@ -30,8 +32,10 @@ use tiny_http::StatusCode;
 
 mod dump;
 mod read_api_key;
+mod translate;
 use dump::ExchangeDumper;
 use read_api_key::read_auth_header_from_stdin;
+use translate::MappedRequestBody;
 
 /// CLI arguments for the proxy.
 #[derive(Debug, Clone, Parser)]
@@ -53,9 +57,20 @@ pub struct Args {
     #[arg(long, default_value = "https://api.openai.com/v1/responses")]
     pub upstream_url: String,
 
+    /// Upstream wire API format used at --upstream-url.
+    #[arg(long, default_value = "responses")]
+    pub upstream_wire_api: UpstreamWireApi,
+
     /// Directory where request/response dumps should be written as JSON.
     #[arg(long, value_name = "DIR")]
     pub dump_dir: Option<PathBuf>,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
+pub enum UpstreamWireApi {
+    Responses,
+    #[value(name = "chat-completions")]
+    ChatCompletions,
 }
 
 #[derive(Serialize)]
@@ -67,6 +82,7 @@ struct ServerInfo {
 struct ForwardConfig {
     upstream_url: Url,
     host_header: HeaderValue,
+    upstream_wire_api: UpstreamWireApi,
 }
 
 /// Entry point for the library main, for parity with other crates.
@@ -85,6 +101,7 @@ pub fn run_main(args: Args) -> Result<()> {
     let forward_config = Arc::new(ForwardConfig {
         upstream_url,
         host_header,
+        upstream_wire_api: args.upstream_wire_api,
     });
     let dump_dir = args
         .dump_dir
@@ -183,6 +200,14 @@ fn forward_request(
     let reader = req.as_reader();
     reader.read_to_end(&mut body)?;
 
+    let mapped_request = match config.upstream_wire_api {
+        UpstreamWireApi::Responses => MappedRequestBody {
+            body,
+            stream: true,
+        },
+        UpstreamWireApi::ChatCompletions => translate::responses_to_chat_completions_request(&body)?,
+    };
+
     let exchange_dump = dump_dir.and_then(|dump_dir| {
         dump_dir
             .dump_request(&method, &url_path, req.headers(), &body)
@@ -223,17 +248,47 @@ fn forward_request(
     let upstream_resp = client
         .post(config.upstream_url.clone())
         .headers(headers)
-        .body(body)
+        .body(mapped_request.body)
         .send()
         .context("forwarding request to upstream")?;
+
+    let status = upstream_resp.status();
+    let upstream_headers = upstream_resp.headers().clone();
+
+    let mut upstream_body = Vec::new();
+    let mut upstream_resp = upstream_resp;
+    upstream_resp
+        .read_to_end(&mut upstream_body)
+        .context("reading upstream response body")?;
+
+    let (response_body_bytes, force_content_type) = match config.upstream_wire_api {
+        UpstreamWireApi::Responses => (upstream_body, None),
+        UpstreamWireApi::ChatCompletions => {
+            if status.is_success() {
+                if mapped_request.stream {
+                    (
+                        translate::chat_completions_sse_to_responses_sse(&upstream_body)?,
+                        Some("text/event-stream"),
+                    )
+                } else {
+                    (
+                        translate::chat_completions_json_to_responses_json(&upstream_body)?,
+                        Some("application/json"),
+                    )
+                }
+            } else {
+                (upstream_body, None)
+            }
+        }
+    };
 
     // We have to create an adapter between a `reqwest::blocking::Response`
     // and a `tiny_http::Response`. Fortunately, `reqwest::blocking::Response`
     // implements `Read`, so we can use it directly as the body of the
     // `tiny_http::Response`.
-    let status = upstream_resp.status();
     let mut response_headers = Vec::new();
-    for (name, value) in upstream_resp.headers().iter() {
+    let mut content_type_overridden = false;
+    for (name, value) in upstream_headers.iter() {
         // Skip headers that tiny_http manages itself.
         if matches!(
             name.as_str(),
@@ -242,24 +297,48 @@ fn forward_request(
             continue;
         }
 
+        if let Some(force_content_type) = force_content_type
+            && name.as_str().eq_ignore_ascii_case("content-type")
+        {
+            if let Ok(header) = Header::from_bytes(
+                b"content-type".as_slice(),
+                force_content_type.as_bytes(),
+            ) {
+                response_headers.push(header);
+                content_type_overridden = true;
+            }
+            continue;
+        }
+
         if let Ok(header) = Header::from_bytes(name.as_str().as_bytes(), value.as_bytes()) {
             response_headers.push(header);
         }
     }
 
-    let content_length = upstream_resp.content_length().and_then(|len| {
-        if len <= usize::MAX as u64 {
-            Some(len as usize)
-        } else {
-            None
-        }
-    });
+    if let Some(force_content_type) = force_content_type
+        && !content_type_overridden
+        && let Ok(header) = Header::from_bytes(b"content-type".as_slice(), force_content_type.as_bytes())
+    {
+        response_headers.push(header);
+    }
 
+    let content_length = Some(response_body_bytes.len());
     let response_body: Box<dyn Read + Send> = if let Some(exchange_dump) = exchange_dump {
-        let headers = upstream_resp.headers().clone();
-        Box::new(exchange_dump.tee_response_body(status.as_u16(), &headers, upstream_resp))
+        let mut dump_headers = reqwest::header::HeaderMap::new();
+        for header in &response_headers {
+            if let Ok(name) = reqwest::header::HeaderName::from_bytes(header.field.as_str().as_bytes())
+                && let Ok(value) = reqwest::header::HeaderValue::from_bytes(header.value.as_bytes())
+            {
+                dump_headers.append(name, value);
+            }
+        }
+        Box::new(exchange_dump.tee_response_body(
+            status.as_u16(),
+            &dump_headers,
+            Cursor::new(response_body_bytes),
+        ))
     } else {
-        Box::new(upstream_resp)
+        Box::new(Cursor::new(response_body_bytes))
     };
 
     let response = Response::new(

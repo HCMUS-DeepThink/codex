@@ -6,6 +6,7 @@ use std::collections::BTreeMap;
 
 const DEFAULT_CHAT_MODEL: &str = "gpt-4o-mini";
 const DEFAULT_RESPONSE_ID: &str = "chatcmpl-proxy";
+const DEFAULT_FUNCTION_NAME: &str = "tool_call";
 
 pub struct MappedRequestBody {
     pub body: Vec<u8>,
@@ -91,7 +92,7 @@ pub fn responses_to_chat_completions_request(body: &[u8]) -> Result<MappedReques
                 let name = item
                     .get("name")
                     .and_then(Value::as_str)
-                    .unwrap_or("tool_call");
+                    .unwrap_or(DEFAULT_FUNCTION_NAME);
                 let arguments = item
                     .get("arguments")
                     .and_then(Value::as_str)
@@ -212,7 +213,7 @@ pub fn chat_completions_json_to_responses_json(body: &[u8]) -> Result<Vec<u8>> {
             let name = function
                 .get("name")
                 .and_then(Value::as_str)
-                .unwrap_or("tool_call");
+                .unwrap_or(DEFAULT_FUNCTION_NAME);
             let arguments = function
                 .get("arguments")
                 .and_then(Value::as_str)
@@ -258,7 +259,7 @@ pub fn chat_completions_json_to_responses_json(body: &[u8]) -> Result<Vec<u8>> {
 }
 
 pub fn chat_completions_sse_to_responses_sse(body: &[u8]) -> Result<Vec<u8>> {
-    let text = String::from_utf8(body.to_vec()).context("reading chat completions sse as utf-8")?;
+    let text = std::str::from_utf8(body).context("reading chat completions sse as utf-8")?;
     let mut out = String::new();
     let mut emitted_created = false;
     let mut response_id = DEFAULT_RESPONSE_ID.to_string();

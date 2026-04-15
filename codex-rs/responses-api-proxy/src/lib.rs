@@ -261,39 +261,7 @@ fn forward_request(
 
     let status = upstream_resp.status();
     let upstream_headers = upstream_resp.headers().clone();
-
-    let mut upstream_body = Vec::new();
-    upstream_resp
-        .read_to_end(&mut upstream_body)
-        .context("reading upstream response body")?;
-
-    let (response_body_bytes, force_content_type) = match config.upstream_wire_api {
-        UpstreamWireApi::Responses => (upstream_body, None),
-        UpstreamWireApi::ChatCompletions => {
-            if status.is_success() {
-                if mapped_request.stream {
-                    (
-                        translate::chat_completions_sse_to_responses_sse(&upstream_body)?,
-                        Some("text/event-stream"),
-                    )
-                } else {
-                    (
-                        translate::chat_completions_json_to_responses_json(&upstream_body)?,
-                        Some("application/json"),
-                    )
-                }
-            } else {
-                (upstream_body, None)
-            }
-        }
-    };
-
-    // We have to create an adapter between a `reqwest::blocking::Response`
-    // and a `tiny_http::Response`. Fortunately, `reqwest::blocking::Response`
-    // implements `Read`, so we can use it directly as the body of the
-    // `tiny_http::Response`.
     let mut response_headers = Vec::new();
-    let mut content_type_overridden = false;
     for (name, value) in upstream_headers.iter() {
         // Skip headers that tiny_http manages itself.
         if matches!(
@@ -302,30 +270,69 @@ fn forward_request(
         ) {
             continue;
         }
-
-        if let Some(force_content_type) = force_content_type
-            && name.as_str().eq_ignore_ascii_case("content-type")
-        {
-            if let Ok(header) =
-                Header::from_bytes(b"content-type".as_slice(), force_content_type.as_bytes())
-            {
-                response_headers.push(header);
-                content_type_overridden = true;
-            }
-            continue;
-        }
-
         if let Ok(header) = Header::from_bytes(name.as_str().as_bytes(), value.as_bytes()) {
             response_headers.push(header);
         }
     }
 
-    if let Some(force_content_type) = force_content_type
-        && !content_type_overridden
-        && let Ok(header) =
+    if config.upstream_wire_api == UpstreamWireApi::Responses {
+        let content_length = upstream_resp.content_length().and_then(|len| {
+            if len <= usize::MAX as u64 {
+                Some(len as usize)
+            } else {
+                None
+            }
+        });
+
+        let response_body: Box<dyn Read + Send> = if let Some(exchange_dump) = exchange_dump {
+            Box::new(exchange_dump.tee_response_body(
+                status.as_u16(),
+                &upstream_headers,
+                upstream_resp,
+            ))
+        } else {
+            Box::new(upstream_resp)
+        };
+
+        let response = Response::new(
+            StatusCode(status.as_u16()),
+            response_headers,
+            response_body,
+            content_length,
+            None,
+        );
+        let _ = req.respond(response);
+        return Ok(());
+    }
+
+    let mut upstream_body = Vec::new();
+    upstream_resp
+        .read_to_end(&mut upstream_body)
+        .context("reading upstream response body")?;
+    let (response_body_bytes, force_content_type) = if status.is_success() {
+        if mapped_request.stream {
+            (
+                translate::chat_completions_sse_to_responses_sse(&upstream_body)?,
+                Some("text/event-stream"),
+            )
+        } else {
+            (
+                translate::chat_completions_json_to_responses_json(&upstream_body)?,
+                Some("application/json"),
+            )
+        }
+    } else {
+        (upstream_body, None)
+    };
+
+    if let Some(force_content_type) = force_content_type {
+        response_headers
+            .retain(|header| !header.field.as_str().eq_ignore_ascii_case("content-type"));
+        if let Ok(header) =
             Header::from_bytes(b"content-type".as_slice(), force_content_type.as_bytes())
-    {
-        response_headers.push(header);
+        {
+            response_headers.push(header);
+        }
     }
 
     let content_length = Some(response_body_bytes.len());

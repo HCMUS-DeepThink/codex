@@ -211,13 +211,10 @@ fn forward_request(
     });
 
     let mapped_request = match config.upstream_wire_api {
-        UpstreamWireApi::Responses => {
-            let stream = serde_json::from_slice::<serde_json::Value>(&body)
-                .ok()
-                .and_then(|request| request.get("stream").and_then(serde_json::Value::as_bool))
-                .unwrap_or(false);
-            MappedRequestBody { body, stream }
-        }
+        UpstreamWireApi::Responses => MappedRequestBody {
+            body,
+            stream: false,
+        },
         UpstreamWireApi::ChatCompletions => {
             translate::responses_to_chat_completions_request(&body)?
         }
@@ -250,7 +247,7 @@ fn forward_request(
 
     headers.insert(HOST, config.host_header.clone());
 
-    let upstream_resp = client
+    let mut upstream_resp = client
         .post(config.upstream_url.clone())
         .headers(headers)
         .body(mapped_request.body)
@@ -261,7 +258,6 @@ fn forward_request(
     let upstream_headers = upstream_resp.headers().clone();
 
     let mut upstream_body = Vec::new();
-    let mut upstream_resp = upstream_resp;
     upstream_resp
         .read_to_end(&mut upstream_body)
         .context("reading upstream response body")?;

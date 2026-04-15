@@ -4,6 +4,9 @@ use serde_json::Value;
 use serde_json::json;
 use std::collections::BTreeMap;
 
+const DEFAULT_CHAT_MODEL: &str = "gpt-4o-mini";
+const DEFAULT_RESPONSE_ID: &str = "chatcmpl-proxy";
+
 pub struct MappedRequestBody {
     pub body: Vec<u8>,
     pub stream: bool,
@@ -14,7 +17,7 @@ pub fn responses_to_chat_completions_request(body: &[u8]) -> Result<MappedReques
     let model = request
         .get("model")
         .and_then(Value::as_str)
-        .unwrap_or("gpt-4o-mini");
+        .unwrap_or(DEFAULT_CHAT_MODEL);
     let stream = request
         .get("stream")
         .and_then(Value::as_bool)
@@ -167,7 +170,7 @@ pub fn chat_completions_json_to_responses_json(body: &[u8]) -> Result<Vec<u8>> {
     let response_id = chat_response
         .get("id")
         .and_then(Value::as_str)
-        .unwrap_or("chatcmpl-proxy")
+        .unwrap_or(DEFAULT_RESPONSE_ID)
         .to_string();
     let model = chat_response
         .get("model")
@@ -258,7 +261,7 @@ pub fn chat_completions_sse_to_responses_sse(body: &[u8]) -> Result<Vec<u8>> {
     let text = String::from_utf8(body.to_vec()).context("reading chat completions sse as utf-8")?;
     let mut out = String::new();
     let mut emitted_created = false;
-    let mut response_id = "chatcmpl-proxy".to_string();
+    let mut response_id = DEFAULT_RESPONSE_ID.to_string();
     let mut assistant_text = String::new();
     let mut usage = None::<Value>;
     let mut tool_calls: BTreeMap<usize, ToolCallState> = BTreeMap::new();

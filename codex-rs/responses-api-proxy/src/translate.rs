@@ -15,7 +15,10 @@ pub fn responses_to_chat_completions_request(body: &[u8]) -> Result<MappedReques
         .get("model")
         .and_then(Value::as_str)
         .unwrap_or("gpt-4o-mini");
-    let stream = request.get("stream").and_then(Value::as_bool).unwrap_or(false);
+    let stream = request
+        .get("stream")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     let mut messages = Vec::new();
 
     if let Some(instructions) = request.get("instructions").and_then(Value::as_str)
@@ -41,13 +44,7 @@ pub fn responses_to_chat_completions_request(body: &[u8]) -> Result<MappedReques
                 let role = item
                     .get("role")
                     .and_then(Value::as_str)
-                    .map(|role| {
-                        if role == "developer" {
-                            "system"
-                        } else {
-                            role
-                        }
-                    })
+                    .map(|role| if role == "developer" { "system" } else { role })
                     .unwrap_or("user");
                 let content = message_content_to_chat_content(item.get("content"));
                 messages.push(json!({
@@ -84,7 +81,11 @@ pub fn responses_to_chat_completions_request(body: &[u8]) -> Result<MappedReques
                     .get("call_id")
                     .and_then(Value::as_str)
                     .unwrap_or_default();
-                let content = item.get("output").cloned().unwrap_or(Value::Null).to_string();
+                let content = item
+                    .get("output")
+                    .cloned()
+                    .unwrap_or(Value::Null)
+                    .to_string();
                 messages.push(json!({
                     "role": "tool",
                     "tool_call_id": call_id,

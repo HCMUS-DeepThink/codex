@@ -1,7 +1,7 @@
 use std::fs::File;
 use std::fs::{self};
-use std::io::Read;
 use std::io::Cursor;
+use std::io::Read;
 use std::io::Write;
 use std::net::SocketAddr;
 use std::net::TcpListener;
@@ -200,14 +200,6 @@ fn forward_request(
     let reader = req.as_reader();
     reader.read_to_end(&mut body)?;
 
-    let mapped_request = match config.upstream_wire_api {
-        UpstreamWireApi::Responses => MappedRequestBody {
-            body,
-            stream: true,
-        },
-        UpstreamWireApi::ChatCompletions => translate::responses_to_chat_completions_request(&body)?,
-    };
-
     let exchange_dump = dump_dir.and_then(|dump_dir| {
         dump_dir
             .dump_request(&method, &url_path, req.headers(), &body)
@@ -217,6 +209,13 @@ fn forward_request(
             })
             .ok()
     });
+
+    let mapped_request = match config.upstream_wire_api {
+        UpstreamWireApi::Responses => MappedRequestBody { body, stream: true },
+        UpstreamWireApi::ChatCompletions => {
+            translate::responses_to_chat_completions_request(&body)?
+        }
+    };
 
     // Build headers for upstream, forwarding everything from the incoming
     // request except Authorization (we replace it below).
@@ -300,10 +299,9 @@ fn forward_request(
         if let Some(force_content_type) = force_content_type
             && name.as_str().eq_ignore_ascii_case("content-type")
         {
-            if let Ok(header) = Header::from_bytes(
-                b"content-type".as_slice(),
-                force_content_type.as_bytes(),
-            ) {
+            if let Ok(header) =
+                Header::from_bytes(b"content-type".as_slice(), force_content_type.as_bytes())
+            {
                 response_headers.push(header);
                 content_type_overridden = true;
             }
@@ -317,7 +315,8 @@ fn forward_request(
 
     if let Some(force_content_type) = force_content_type
         && !content_type_overridden
-        && let Ok(header) = Header::from_bytes(b"content-type".as_slice(), force_content_type.as_bytes())
+        && let Ok(header) =
+            Header::from_bytes(b"content-type".as_slice(), force_content_type.as_bytes())
     {
         response_headers.push(header);
     }
@@ -326,7 +325,8 @@ fn forward_request(
     let response_body: Box<dyn Read + Send> = if let Some(exchange_dump) = exchange_dump {
         let mut dump_headers = reqwest::header::HeaderMap::new();
         for header in &response_headers {
-            if let Ok(name) = reqwest::header::HeaderName::from_bytes(header.field.as_str().as_bytes())
+            if let Ok(name) =
+                reqwest::header::HeaderName::from_bytes(header.field.as_str().as_bytes())
                 && let Ok(value) = reqwest::header::HeaderValue::from_bytes(header.value.as_bytes())
             {
                 dump_headers.append(name, value);

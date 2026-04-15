@@ -469,7 +469,7 @@ fn function_call_output_to_text(value: Option<&Value>) -> String {
         return String::new();
     };
     match value {
-        Value::String(content) => content.clone(),
+        Value::String(content) => content.to_string(),
         Value::Array(items) => items
             .iter()
             .filter_map(|item| item.get("text").and_then(Value::as_str))
@@ -484,7 +484,7 @@ fn chat_message_text(content: Option<&Value>) -> String {
         return String::new();
     };
     match content {
-        Value::String(text) => text.clone(),
+        Value::String(text) => text.to_string(),
         Value::Array(parts) => parts
             .iter()
             .filter_map(|part| {
@@ -605,10 +605,10 @@ mod tests {
         .unwrap();
 
         let body: Value = serde_json::from_slice(&mapped.body).unwrap();
-        assert_eq!(mapped.stream, true);
+        assert!(mapped.stream);
         assert_eq!(body["model"], "gpt-4.1");
-        assert_eq!(body["stream"], true);
-        assert_eq!(body["stream_options"]["include_usage"], true);
+        assert!(body["stream"].as_bool().unwrap());
+        assert!(body["stream_options"]["include_usage"].as_bool().unwrap());
         assert_eq!(body["messages"][0]["role"], "system");
         assert_eq!(body["messages"][1]["role"], "user");
         assert_eq!(body["messages"][2]["role"], "tool");

@@ -215,7 +215,7 @@ fn forward_request(
             let stream = serde_json::from_slice::<serde_json::Value>(&body)
                 .ok()
                 .and_then(|request| request.get("stream").and_then(serde_json::Value::as_bool))
-                .unwrap_or(true);
+                .unwrap_or(false);
             MappedRequestBody { body, stream }
         }
         UpstreamWireApi::ChatCompletions => {

@@ -52,19 +52,7 @@ pub fn responses_to_chat_completions_request(body: &[u8]) -> Result<MappedReques
                     "content": content,
                 }));
             }
-            "function_call_output" => {
-                let call_id = item
-                    .get("call_id")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default();
-                let content = function_call_output_to_text(item.get("output"));
-                messages.push(json!({
-                    "role": "tool",
-                    "tool_call_id": call_id,
-                    "content": content,
-                }));
-            }
-            "custom_tool_call_output" => {
+            "function_call_output" | "custom_tool_call_output" => {
                 let call_id = item
                     .get("call_id")
                     .and_then(Value::as_str)
